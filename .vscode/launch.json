@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}\\build\\Debug\\h750-test1.elf",
+            "name": "Debug with PyOCD",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "showDevDebugOutput": "raw",
+            "servertype": "pyocd",
+            "serverArgs": [
+                "--target",
+                "STM32H750VBTx"
+            ],
+            "overrideGDBServerStartedRegex": "GDB server listening on port 50000"
+        }
+    ]
+}
