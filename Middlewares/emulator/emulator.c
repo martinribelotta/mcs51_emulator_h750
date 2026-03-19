@@ -1,4 +1,5 @@
 #include "emulator.h"
+#include "mcs51_emulator.h"
 
 #include <stdio.h>
 #include <cmsis_os2.h>
