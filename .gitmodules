@@ -1,0 +1,3 @@
+[submodule "Middlewares/emulator/mcs51_emulator"]
+	path = Middlewares/emulator/mcs51_emulator
+	url = git@github.com:martinribelotta/mcs51_emulator.git
