@@ -17,7 +17,43 @@
                 "--target",
                 "STM32H750VBTx"
             ],
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "decoders": [
+                    {
+                        "label": "",
+                        "port": 0,
+                        "type": "console"
+                    }
+                ]
+            },
             "overrideGDBServerStartedRegex": "GDB server listening on port 50000"
+        },
+        {
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}\\build\\Debug\\h750-test1.elf",
+            "name": "Debug with OpenOCD",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "showDevDebugOutput": "raw",
+            "servertype": "openocd",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32h7x.cfg"
+            ],
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "decoders": [
+                    {
+                        "label": "",
+                        "port": 0,
+                        "type": "console"
+                    }
+                ]
+            }
         }
     ]
 }

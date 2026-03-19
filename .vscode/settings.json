@@ -11,5 +11,6 @@
         "starm-clangd",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/st-arm-clang/21.1.1+st.6/bin/starm-clang*",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/st-arm-clang/21.1.1+st.6/bin/starm-clang++*"
-    ]
+    ],
+    "cortex-debug.openocdPath.windows": "C:\\Users\\marti\\.local\\xpack-openocd-0.12.0-7\\bin\\openocd.exe"
 }

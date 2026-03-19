@@ -46,11 +46,16 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/emulator.c
+    Drivers/RTT/SEGGER_RTT.c
+    Drivers/RTT/SEGGER_RTT_printf.c
+    Drivers/RTT/SEGGER_RTT_Syscalls_GCC.c
+    Drivers/RTT/SEGGER_RTT_ASM_ARMv7M.S
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    Drivers/RTT
 )
 
 # Add project symbols (macros)
