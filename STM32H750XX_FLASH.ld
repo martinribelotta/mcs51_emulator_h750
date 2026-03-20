@@ -65,7 +65,7 @@ FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 128K
 
 /* Highest address of the user mode stack */
 _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
-_Min_Stack_Size = 0x400; /* required amount of stack for _sbrk runtime guard */
+_Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Define output sections */
 SECTIONS
