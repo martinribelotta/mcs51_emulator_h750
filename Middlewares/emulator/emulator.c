@@ -2,6 +2,7 @@
 #include "mcs51_emulator.h"
 #include "tim.h"
 #include "usart.h"
+#include "gpio.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -128,10 +129,13 @@ static cpu_t cpu;
 static uint8_t code_mem[CODE_MEM_SIZE];
 static uint8_t xdata_mem[XDATA_MEM_SIZE];
 static uart_t uart_dev;
+static ports_t ports_dev;
 static uint8_t usart1_rx_irq_byte;
 static volatile uint16_t usart1_rx_head = 0;
 static volatile uint16_t usart1_rx_tail = 0;
 static uint8_t usart1_rx_ring[UART_RX_RING_SIZE];
+static uint8_t virtual_port_in[4] = { 0xFFu, 0xFFu, 0xFFu, 0xFFu };
+static uint8_t virtual_port_out[4] = { 0x00u, 0x00u, 0x00u, 0x00u };
 
 static const timing_config_t timing_cfg = {
   .fosc_hz = EMU_TARGET_FOSC_HZ,
@@ -161,6 +165,33 @@ static void uart_tx_to_stm32(uint8_t byte, void *user)
 {
   UART_HandleTypeDef *huart = (UART_HandleTypeDef *)user;
   (void)HAL_UART_Transmit(huart, &byte, 1u, HAL_MAX_DELAY);
+}
+
+static uint8_t ports_read_virtual(uint8_t port, void *user)
+{
+  (void)user;
+  if (port >= 4u)
+  {
+    return 0xFFu;
+  }
+  return virtual_port_in[port];
+}
+
+static void ports_write_virtual(uint8_t port, uint8_t level, uint8_t mask, void *user)
+{
+  (void)user;
+  if (port >= 4u)
+  {
+    return;
+  }
+
+  virtual_port_out[port] = (uint8_t)((virtual_port_out[port] & (uint8_t)~mask) | (level & mask));
+
+  if (port == 1u && (mask & 0x01u) != 0u)
+  {
+    GPIO_PinState led_state = ((level & 0x01u) != 0u) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, led_state);
+  }
 }
 
 static void usart1_rx_start_it(void)
@@ -247,18 +278,19 @@ static void emulator_load_min_program(void)
       0xD2, 0x8E,             /* SETB TR1 */
       0x75, 0x98, 0x50,       /* MOV SCON,#50h */
       0xD2, 0x99,             /* SETB TI */
-      0x90, 0x00, 0x31,       /* MOV DPTR,#0031h */
+      0x90, 0x00, 0x33,       /* MOV DPTR,#0033h */
       0xE4,                   /* CLR A */
       0x93,                   /* MOVC A,@A+DPTR */
       0x60, 0x06,             /* JZ echo_loop */
-      0x12, 0x00, 0x29,       /* LCALL putc */
+      0x12, 0x00, 0x2B,       /* LCALL putc */
       0xA3,                   /* INC DPTR */
       0x80, 0xF6,             /* SJMP print_loop */
       0x30, 0x98, 0xFD,       /* echo_loop: JNB RI,echo_loop */
       0xE5, 0x99,             /* MOV A,SBUF */
       0xC2, 0x98,             /* CLR RI */
-      0x12, 0x00, 0x29,       /* LCALL putc */
-      0x80, 0xF4,             /* SJMP echo_loop */
+      0x12, 0x00, 0x2B,       /* LCALL putc */
+      0xB2, 0x90,             /* CPL P1.0 */
+      0x80, 0xF2,             /* SJMP echo_loop */
       0x30, 0x99, 0xFD,       /* putc: JNB TI,putc */
       0xC2, 0x99,             /* CLR TI */
       0xF5, 0x99,             /* MOV SBUF,A */
@@ -285,6 +317,7 @@ void emulator_entry(void)
       (unsigned long)cycles_per_second,
       (unsigned long)ns_per_cycle);
     printf("MCS51 UART demo bridged to USART1\n");
+    printf("Virtual GPIO: P0..P3 enabled, P1.0 -> PA8 LED\n");
 
   tim5_timebase_init();
   if (tim5_counter_hz == 0ull)
@@ -298,6 +331,9 @@ void emulator_entry(void)
 
   cpu = cpu_template;
   mem_map_attach(&cpu, &mem);
+  ports_init(&ports_dev, &cpu, ports_read_virtual, ports_write_virtual, NULL);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+
   uart_init(&uart_dev, &timing_cfg);
   uart_attach(&cpu, &uart_dev);
   uart_set_tx_callback(&uart_dev, uart_tx_to_stm32, &huart1);
