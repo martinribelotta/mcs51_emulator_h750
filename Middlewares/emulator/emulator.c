@@ -16,6 +16,7 @@ enum
   EMU_TARGET_FOSC_HZ = 11059200,
   EMU_CLOCKS_PER_CYCLE = 12,
   NS_PER_SEC = 1000000000,
+  UART_RX_RING_SIZE = 128,
 };
 
 static bool tim5_started = false;
@@ -127,6 +128,10 @@ static cpu_t cpu;
 static uint8_t code_mem[CODE_MEM_SIZE];
 static uint8_t xdata_mem[XDATA_MEM_SIZE];
 static uart_t uart_dev;
+static uint8_t usart1_rx_irq_byte;
+static volatile uint16_t usart1_rx_head = 0;
+static volatile uint16_t usart1_rx_tail = 0;
+static uint8_t usart1_rx_ring[UART_RX_RING_SIZE];
 
 static const timing_config_t timing_cfg = {
   .fosc_hz = EMU_TARGET_FOSC_HZ,
@@ -158,12 +163,63 @@ static void uart_tx_to_stm32(uint8_t byte, void *user)
   (void)HAL_UART_Transmit(huart, &byte, 1u, HAL_MAX_DELAY);
 }
 
-static void uart_rx_from_stm32_poll(void)
+static void usart1_rx_start_it(void)
 {
-  uint8_t byte = 0;
-  if (HAL_UART_Receive(&huart1, &byte, 1u, 0u) == HAL_OK)
+  (void)HAL_UART_Receive_IT(&huart1, &usart1_rx_irq_byte, 1u);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
   {
-    (void)uart_queue_rx_byte(&uart_dev, byte);
+    uint16_t head = usart1_rx_head;
+    uint16_t next = (uint16_t)((head + 1u) % UART_RX_RING_SIZE);
+    if (next != usart1_rx_tail)
+    {
+      usart1_rx_ring[head] = usart1_rx_irq_byte;
+      usart1_rx_head = next;
+    }
+    usart1_rx_start_it();
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    __HAL_UART_CLEAR_NEFLAG(huart);
+    __HAL_UART_CLEAR_FEFLAG(huart);
+    __HAL_UART_CLEAR_PEFLAG(huart);
+    usart1_rx_start_it();
+  }
+}
+
+static void uart_rx_from_stm32_irq_drain(void)
+{
+  while (1)
+  {
+    uint16_t tail;
+    uint8_t byte;
+
+    __disable_irq();
+    if (usart1_rx_tail == usart1_rx_head)
+    {
+      __enable_irq();
+      break;
+    }
+    tail = usart1_rx_tail;
+    byte = usart1_rx_ring[tail];
+    __enable_irq();
+
+    if (!uart_queue_rx_byte(&uart_dev, byte))
+    {
+      break;
+    }
+
+    __disable_irq();
+    usart1_rx_tail = (uint16_t)((tail + 1u) % UART_RX_RING_SIZE);
+    __enable_irq();
   }
 }
 
@@ -218,7 +274,6 @@ static void emulator_load_min_program(void)
 
 void emulator_entry(void)
 {
-  uint32_t slice = 0;
   uint32_t cycles_per_second = (uint32_t)timing_cycles_per_second(&timing_cfg);
   uint32_t ns_per_cycle = (uint32_t)timing_cycles_to_ns(&timing_cfg, 1u);
 
@@ -247,13 +302,14 @@ void emulator_entry(void)
   uart_attach(&cpu, &uart_dev);
   uart_set_tx_callback(&uart_dev, uart_tx_to_stm32, &huart1);
   cpu_set_tick_hooks(&cpu, tick_hooks, (uint8_t)MCS51_ARRAY_LEN(tick_hooks));
+  usart1_rx_start_it();
 
   memset(xdata_mem, 0x00, sizeof(xdata_mem));
   emulator_load_min_program();
 
   while (1)
   {
-    uart_rx_from_stm32_poll();
+    uart_rx_from_stm32_irq_drain();
 
     timing_reset(&timing_state);
     uint64_t steps = cpu_run_timed(&cpu,
@@ -261,18 +317,6 @@ void emulator_entry(void)
                                    &timing_cfg,
                                    &timing_state,
                                    &time_iface);
-    uint32_t steps_u32 = (uint32_t)steps;
-    uint32_t emu_us_u32 = (uint32_t)timing_cycles_to_us(&timing_cfg, timing_state.cycles_total);
-    if ((slice % 10u) == 0u)
-    {
-      printf("slice=%lu steps=%lu emu_us=%lu PC=0x%04X A=0x%02X SP=0x%02X\n",
-             (unsigned long)slice,
-             (unsigned long)steps_u32,
-             (unsigned long)emu_us_u32,
-             (unsigned int)cpu.pc,
-             (unsigned int)cpu.acc,
-             (unsigned int)cpu.sp);
-    }
 
     if (cpu.halted)
     {
@@ -287,7 +331,5 @@ void emulator_entry(void)
     {
       osThreadYield();
     }
-
-    slice++;
   }
 }
