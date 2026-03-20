@@ -270,72 +270,17 @@ static const mem_map_t mem = {
     .xdata_region_count = 1,
 };
 
-extern const uint8_t mcs51_firmware_start[] __attribute__((weak));
-extern const uint8_t mcs51_firmware_end[] __attribute__((weak));
+extern const uint8_t mcs51_firmware_start[];
+extern const uint8_t mcs51_firmware_end[];
 
-static void emulator_load_min_program(void)
+static void emulator_load_embedded_firmware(void)
 {
-  static const uint8_t demo_prog[] = {
-      0x75, 0x89, 0x20,       /* MOV TMOD,#20h */
-      0x75, 0x8D, 0xFD,       /* MOV TH1,#0FDh */
-      0x75, 0x8B, 0xFD,       /* MOV TL1,#0FDh */
-      0xD2, 0x8E,             /* SETB TR1 */
-      0x75, 0x98, 0x50,       /* MOV SCON,#50h */
-      0xD2, 0x99,             /* SETB TI */
-      0x90, 0x00, 0x33,       /* MOV DPTR,#0033h */
-      0xE4,                   /* CLR A */
-      0x93,                   /* MOVC A,@A+DPTR */
-      0x60, 0x06,             /* JZ echo_loop */
-      0x12, 0x00, 0x2B,       /* LCALL putc */
-      0xA3,                   /* INC DPTR */
-      0x80, 0xF6,             /* SJMP print_loop */
-      0x30, 0x98, 0xFD,       /* echo_loop: JNB RI,echo_loop */
-      0xE5, 0x99,             /* MOV A,SBUF */
-      0xC2, 0x98,             /* CLR RI */
-      0x12, 0x00, 0x2B,       /* LCALL putc */
-      0xB2, 0x90,             /* CPL P1.0 */
-      0x80, 0xF2,             /* SJMP echo_loop */
-      0x30, 0x99, 0xFD,       /* putc: JNB TI,putc */
-      0xC2, 0x99,             /* CLR TI */
-      0xF5, 0x99,             /* MOV SBUF,A */
-      0x22,                   /* RET */
-      'M','C','S','5','1',' ','U','A','R','T','1',' ','d','e','m','o','\r','\n',
-      'E','c','h','o',':',' ','\r','\n',
-      0x00,
-  };
-
-  memset(code_mem, 0x00, sizeof(code_mem));
-  (void)memcpy(code_mem, demo_prog, sizeof(demo_prog));
-}
-
-static bool emulator_load_embedded_firmware(void)
-{
-  if (mcs51_firmware_start == NULL || mcs51_firmware_end == NULL)
-  {
-    return false;
-  }
-
   uintptr_t start = (uintptr_t)mcs51_firmware_start;
   uintptr_t end = (uintptr_t)mcs51_firmware_end;
-
-  if (end <= start)
-  {
-    return false;
-  }
-
   size_t fw_size = (size_t)(end - start);
-  if (fw_size > sizeof(code_mem))
-  {
-    printf("Embedded firmware too large: %lu bytes (max %lu)\n",
-           (unsigned long)fw_size,
-           (unsigned long)sizeof(code_mem));
-    return false;
-  }
-
   memset(code_mem, 0x00, sizeof(code_mem));
   (void)memcpy(code_mem, mcs51_firmware_start, fw_size);
   printf("Embedded firmware loaded: %lu bytes\n", (unsigned long)fw_size);
-  return true;
 }
 
 void emulator_entry(void)
@@ -375,12 +320,7 @@ void emulator_entry(void)
   usart1_rx_start_it();
 
   memset(xdata_mem, 0x00, sizeof(xdata_mem));
-  if (!emulator_load_embedded_firmware())
-  {
-    printf("Embedded firmware unavailable, loading built-in demo\n");
-    emulator_load_min_program();
-  }
-
+  emulator_load_embedded_firmware();
   while (1)
   {
     uart_rx_from_stm32_irq_drain();

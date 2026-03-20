@@ -1,62 +1,51 @@
-set(MCS51_FW_ASM
-    ${CMAKE_CURRENT_SOURCE_DIR}/mcs51_emulator/mc51code/serial_hello.asm
-    CACHE FILEPATH "Path to 8051 firmware ASM source"
+set(MCS51_FW_HEX
+    ${CMAKE_CURRENT_SOURCE_DIR}/mcs51_emulator/mc51code/serial_hello.hex
+    CACHE FILEPATH "Path to 8051 firmware HEX file"
 )
 
-get_filename_component(MCS51_FW_NAME "${MCS51_FW_ASM}" NAME_WE)
-set(MCS51_FW_HEX "${CMAKE_CURRENT_BINARY_DIR}/${MCS51_FW_NAME}.hex")
-set(MCS51_FW_BIN "${CMAKE_CURRENT_BINARY_DIR}/${MCS51_FW_NAME}.bin")
-set(MCS51_FW_OBJ "${CMAKE_CURRENT_BINARY_DIR}/${MCS51_FW_NAME}.o")
+set(MCS51_FW_BIN "${CMAKE_CURRENT_BINARY_DIR}/mcs51_fw.bin")
+set(MCS51_FW_OBJ "${CMAKE_CURRENT_BINARY_DIR}/mcs51_fw.o")
 
-find_program(ASEM_EXECUTABLE NAMES asem)
-
-set(MCS51_FW_OBJ_INPUTS)
-
-if(ASEM_EXECUTABLE)
-    add_custom_command(
-        OUTPUT ${MCS51_FW_HEX}
-        COMMAND ${ASEM_EXECUTABLE} "${MCS51_FW_ASM}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        DEPENDS ${MCS51_FW_ASM}
-        COMMENT "Assembling 8051 firmware: ${MCS51_FW_ASM}"
-        VERBATIM
-    )
-
+if(EXISTS "${MCS51_FW_HEX}")
     add_custom_command(
         OUTPUT ${MCS51_FW_BIN}
-        COMMAND ${CMAKE_OBJCOPY} -I ihex -O binary "${MCS51_FW_NAME}.hex" "${MCS51_FW_NAME}.bin"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        DEPENDS ${MCS51_FW_HEX}
+        COMMAND ${CMAKE_OBJCOPY} -I ihex -O binary "${MCS51_FW_HEX}" "${MCS51_FW_BIN}"
+        DEPENDS "${MCS51_FW_HEX}"
         COMMENT "Converting Intel HEX to BIN: ${MCS51_FW_HEX}"
         VERBATIM
     )
-
+else()
     add_custom_command(
-        OUTPUT ${MCS51_FW_OBJ}
-        COMMAND ${CMAKE_OBJCOPY}
-            -I binary
-            -O elf32-littlearm
-            -B arm
-            --rename-section .data=.rodata.mcs51_firmware,alloc,load,readonly,data,contents
-            --redefine-sym _binary_${MCS51_FW_NAME}_bin_start=mcs51_firmware_start
-            --redefine-sym _binary_${MCS51_FW_NAME}_bin_end=mcs51_firmware_end
-            "${MCS51_FW_NAME}.bin"
-            "${MCS51_FW_NAME}.o"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        DEPENDS ${MCS51_FW_BIN}
-        COMMENT "Creating linkable object from BIN: ${MCS51_FW_BIN}"
+        OUTPUT ${MCS51_FW_BIN}
+        COMMAND ${CMAKE_COMMAND} -E touch "${MCS51_FW_BIN}"
+        COMMENT "HEX not found (${MCS51_FW_HEX}), generating empty embedded firmware BIN"
         VERBATIM
     )
-
-    set_source_files_properties(${MCS51_FW_OBJ} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
-    set(MCS51_FW_OBJ_INPUTS ${MCS51_FW_OBJ})
-else()
-    message(WARNING "'asem' not found: embedded MCS51 firmware generation disabled; emulator will use built-in demo program.")
+    message(WARNING "MCS51 firmware HEX not found at: ${MCS51_FW_HEX}. Generating empty firmware blob and using runtime fallback.")
 endif()
+
+add_custom_command(
+    OUTPUT ${MCS51_FW_OBJ}
+    COMMAND ${CMAKE_OBJCOPY}
+        -I binary
+        -O elf32-littlearm
+        -B arm
+        --rename-section .data=.rodata.mcs51_firmware,alloc,load,readonly,data,contents
+        --redefine-sym _binary_mcs51_fw_bin_start=mcs51_firmware_start
+        --redefine-sym _binary_mcs51_fw_bin_end=mcs51_firmware_end
+        mcs51_fw.bin
+        mcs51_fw.o
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    DEPENDS ${MCS51_FW_BIN}
+    COMMENT "Creating linkable object from BIN: ${MCS51_FW_BIN}"
+    VERBATIM
+)
+
+set_source_files_properties(${MCS51_FW_OBJ} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 add_library(emulator STATIC
     emulator.c
-    ${MCS51_FW_OBJ_INPUTS}
+    ${MCS51_FW_OBJ}
 )
 
 add_subdirectory(
