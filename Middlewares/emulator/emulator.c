@@ -1,6 +1,7 @@
 #include "emulator.h"
 #include "mcs51_emulator.h"
 #include "tim.h"
+#include "usart.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -125,6 +126,8 @@ static const cpu_t cpu_template = CPU_INIT_TEMPLATE_INIT;
 static cpu_t cpu;
 static uint8_t code_mem[CODE_MEM_SIZE];
 static uint8_t xdata_mem[XDATA_MEM_SIZE];
+static uart_t uart_dev;
+
 static const timing_config_t timing_cfg = {
   .fosc_hz = EMU_TARGET_FOSC_HZ,
   .clocks_per_cycle = EMU_CLOCKS_PER_CYCLE,
@@ -137,6 +140,32 @@ static const cpu_time_iface_t time_iface = {
   .sleep_ns = freertos_sleep_ns,
   .user = NULL,
 };
+
+static void uart_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
+{
+  (void)cpu_ctx;
+  uart_t *uart = (uart_t *)user;
+  uart_tick(uart, cycles);
+}
+
+static const cpu_tick_entry_t tick_hooks[] = {
+  { uart_tick_hook, &uart_dev },
+};
+
+static void uart_tx_to_stm32(uint8_t byte, void *user)
+{
+  UART_HandleTypeDef *huart = (UART_HandleTypeDef *)user;
+  (void)HAL_UART_Transmit(huart, &byte, 1u, HAL_MAX_DELAY);
+}
+
+static void uart_rx_from_stm32_poll(void)
+{
+  uint8_t byte = 0;
+  if (HAL_UART_Receive(&huart1, &byte, 1u, 0u) == HAL_OK)
+  {
+    (void)uart_queue_rx_byte(&uart_dev, byte);
+  }
+}
 
 static const mem_map_region_t code_regions[] = {
   { .base = 0x0000, .size = CODE_MEM_SIZE, .read = ram_read, .write = ram_write, .user = code_mem },
@@ -155,13 +184,36 @@ static const mem_map_t mem = {
 
 static void emulator_load_min_program(void)
 {
-  memset(code_mem, 0x00, sizeof(code_mem));
+  static const uint8_t demo_prog[] = {
+      0x75, 0x89, 0x20,       /* MOV TMOD,#20h */
+      0x75, 0x8D, 0xFD,       /* MOV TH1,#0FDh */
+      0x75, 0x8B, 0xFD,       /* MOV TL1,#0FDh */
+      0xD2, 0x8E,             /* SETB TR1 */
+      0x75, 0x98, 0x50,       /* MOV SCON,#50h */
+      0xD2, 0x99,             /* SETB TI */
+      0x90, 0x00, 0x31,       /* MOV DPTR,#0031h */
+      0xE4,                   /* CLR A */
+      0x93,                   /* MOVC A,@A+DPTR */
+      0x60, 0x06,             /* JZ echo_loop */
+      0x12, 0x00, 0x29,       /* LCALL putc */
+      0xA3,                   /* INC DPTR */
+      0x80, 0xF6,             /* SJMP print_loop */
+      0x30, 0x98, 0xFD,       /* echo_loop: JNB RI,echo_loop */
+      0xE5, 0x99,             /* MOV A,SBUF */
+      0xC2, 0x98,             /* CLR RI */
+      0x12, 0x00, 0x29,       /* LCALL putc */
+      0x80, 0xF4,             /* SJMP echo_loop */
+      0x30, 0x99, 0xFD,       /* putc: JNB TI,putc */
+      0xC2, 0x99,             /* CLR TI */
+      0xF5, 0x99,             /* MOV SBUF,A */
+      0x22,                   /* RET */
+      'M','C','S','5','1',' ','U','A','R','T','1',' ','d','e','m','o','\r','\n',
+      'E','c','h','o',':',' ','\r','\n',
+      0x00,
+  };
 
-  code_mem[0] = 0x74; /* MOV A,#imm */
-  code_mem[1] = 0x2A;
-  code_mem[2] = 0x04; /* INC A */
-  code_mem[3] = 0x80; /* SJMP rel */
-  code_mem[4] = 0xFD; /* back to 0x0002 */
+  memset(code_mem, 0x00, sizeof(code_mem));
+  (void)memcpy(code_mem, demo_prog, sizeof(demo_prog));
 }
 
 void emulator_entry(void)
@@ -177,6 +229,7 @@ void emulator_entry(void)
          (unsigned int)timing_cfg.clocks_per_cycle,
       (unsigned long)cycles_per_second,
       (unsigned long)ns_per_cycle);
+    printf("MCS51 UART demo bridged to USART1\n");
 
   tim5_timebase_init();
   if (tim5_counter_hz == 0ull)
@@ -190,11 +243,18 @@ void emulator_entry(void)
 
   cpu = cpu_template;
   mem_map_attach(&cpu, &mem);
+  uart_init(&uart_dev, &timing_cfg);
+  uart_attach(&cpu, &uart_dev);
+  uart_set_tx_callback(&uart_dev, uart_tx_to_stm32, &huart1);
+  cpu_set_tick_hooks(&cpu, tick_hooks, (uint8_t)MCS51_ARRAY_LEN(tick_hooks));
+
   memset(xdata_mem, 0x00, sizeof(xdata_mem));
   emulator_load_min_program();
 
   while (1)
   {
+    uart_rx_from_stm32_poll();
+
     timing_reset(&timing_state);
     uint64_t steps = cpu_run_timed(&cpu,
                                    EMU_STEPS_PER_SLICE,
