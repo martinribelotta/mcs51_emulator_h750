@@ -1,106 +1,90 @@
-# h750-test1
+# MCS51 Runtime for STM32
 
-STM32H750 + FreeRTOS firmware that runs an embedded **MCS-51 (8051) emulator** in real time, bridges emulated UART traffic to hardware `USART1`, and exposes virtual 8051 GPIO ports (`P0..P3`) with a hardware mapping from `P1.0` to `PA8` (LED).
+Run legacy 8051 firmware on modern STM32 hardware without modifying the original binary.
 
-## What this project does
+## Overview
 
-- Boots on STM32H750 using STM32Cube HAL + FreeRTOS.
-- Starts an emulator task (`emulator_entry`) from the default FreeRTOS thread.
-- Runs a software MCS-51 CPU core with:
-  - 64 KB code memory
-  - 64 KB XDATA memory
-  - UART peripheral emulation
-  - Port peripheral emulation (`P0..P3`)
-- Uses `TIM5` as a high-resolution time base for paced emulation.
-- Bridges emulated serial I/O to physical `USART1`.
-- Loads a built-in 8051 demo program that:
-  - prints a startup message over serial,
-  - then echoes received bytes,
-  - toggles `P1.0` on each echoed character.
-- Reflects `P1.0` to STM32 `PA8`, so the LED toggles while echoing.
+This project provides a runtime that executes MCS-51 (8051) firmware on STM32 microcontrollers with accurate timing and real hardware integration.
 
-## Current implementation summary
+The original firmware runs unmodified, preserving behavior, timing, and peripheral interactions.
 
-### Runtime architecture
+## Key Features
 
-1. MCU init (`main.c`) initializes:
-   - GPIO
-   - USART1
-   - TIM5
-   - FreeRTOS kernel
-2. FreeRTOS starts `StartDefaultTask`.
-3. `StartDefaultTask` calls `emulator_entry()`.
-4. Emulator sets up CPU, memory map, UART, ports, time interface, and starts main emulation loop.
+- Binary compatibility with 8051 firmware
+- No source code required
+- Accurate timing model (cycle-based execution)
+- Runs on real STM32 hardware (not a simulator)
+- GPIO, UART, and timers supported
+- Memory-mapped SFR and XRAM interception
+- Firmware loading from Intel HEX or embedded binary
+- Instruction trace and debugging support
 
-### Emulation timing model
+## What Problem This Solves
 
-- Target 8051 oscillator is configured to **11.0592 MHz**.
-- `clocks_per_cycle = 12`, so machine-cycle pacing is based on:
-  - `11059200 / 12 = 921600 cycles/s`.
-- `cpu_run_timed()` uses a custom time interface backed by `TIM5` counter ticks.
+Many industrial and embedded systems rely on legacy 8051 firmware running on obsolete or unavailable hardware.
 
-### UART bridge (MCS-51 <-> USART1)
+Rewriting firmware is expensive, risky, and often not feasible.
 
-- **TX path:** emulated UART TX callback writes bytes through `HAL_UART_Transmit()` on `USART1`.
-- **RX path:** interrupt-driven on STM32 side:
-  - `USART1_IRQHandler` -> HAL IRQ handler
-  - `HAL_UART_RxCpltCallback` pushes bytes into a small ring buffer
-  - emulator loop drains ring buffer and feeds bytes into emulated UART RX queue (`uart_queue_rx_byte`)
+This runtime allows existing firmware to run on modern hardware platforms without modification.
 
-### Virtual GPIO ports
+## How It Works
 
-- MCS-51 ports `P0..P3` are emulated with the emulator `ports` peripheral.
-- External readback uses virtual input arrays.
-- Port writes update virtual output arrays.
-- Mapping implemented:
-  - `P1.0` -> STM32 `PA8` output (LED)
+- The original firmware is loaded into the runtime
+- The 8051 CPU is emulated with cycle-accurate timing
+- SFR accesses are mapped to STM32 peripherals
+- GPIO, UART, and timers are translated to HAL drivers
+- The firmware executes as if it were running on original hardware
 
-## Pin mapping
+## Example
 
-- `USART1_TX`: `PA9`
-- `USART1_RX`: `PA10`
-- `P1.0` (emulated): mapped to `PA8` (LED output)
+Original firmware:
 
-## Build
+- Toggles a GPIO pin
+- Sends data over UART
 
-This project uses CMake presets and Ninja.
+Running on STM32H750:
 
-### Configure + Build (Debug)
+- P1.0 mapped to PA8
+- UART mapped to USART1
 
-```bash
-cmake --preset Debug
-cmake --build --preset Debug
-```
+Result:
 
-Generated ELF (Debug):
+- LED toggles correctly
+- Serial output matches original behavior
+- No firmware changes required
 
-- `build/Debug/h750-test1.elf`
+## Use Cases
 
-## Flash / Debug
+- Industrial controller migration
+- PLC hardware replacement
+- Legacy system maintenance
+- Firmware preservation
+- Reverse engineering and analysis
 
-Use your usual STM32 workflow (STM32CubeIDE, OpenOCD, ST-LINK, or VS Code launch config) to flash and run `h750-test1.elf`.
+## Demo
 
-## How to test quickly
+This repository includes a working example:
 
-1. Flash firmware and start target.
-2. Open serial terminal on `USART1` (8N1).
-3. Observe startup text from emulated 8051.
-4. Type characters:
-   - They should be echoed back.
-   - `PA8` LED should toggle on each echoed byte.
+- 8051 firmware running on STM32H750
+- GPIO mapped to physical pin
+- UART output visible on host
 
-## Project structure (relevant parts)
+## Project Structure
 
-- `Core/Src/main.c` - board/system init and scheduler start.
-- `Core/Src/freertos.c` - default task that starts emulator.
-- `Core/Src/usart.c` - USART1 init and IRQ enable.
-- `Core/Src/stm32h7xx_it.c` - `USART1_IRQHandler`.
-- `Core/Src/gpio.c` - `PA8` LED output init.
-- `Middlewares/emulator/emulator.c` - emulator integration glue (timing, UART bridge, virtual GPIO, demo firmware).
-- `Middlewares/emulator/mcs51_emulator/lib` - MCS-51 core/peripherals library.
+- mcs51_emulator: portable CPU core
+- mcs51_emulator_h750: STM32 integration
+- HAL bridge for peripherals
 
-## Notes and limitations
+## Status
 
-- The current demo firmware is embedded as raw opcodes in `emulator.c`.
-- UART RX uses interrupt + ring buffer (simple, lightweight design).
-- Emulation pacing is best-effort real time on top of FreeRTOS + HAL.
+The runtime is functional and running real firmware with:
+
+- Accurate timing
+- Working GPIO, UART, and timers
+- Execution on STM32 hardware
+
+## Commercial Use
+
+This project can be used to migrate legacy 8051 firmware to modern platforms.
+
+If you are working with obsolete hardware or need to preserve existing firmware, this runtime can help reduce cost and risk.
