@@ -1,7 +1,4 @@
-set(MCS51_FW_HEX
-    ${CMAKE_CURRENT_SOURCE_DIR}/mcs51_emulator/mc51code/serial_hello.hex
-    CACHE FILEPATH "Path to 8051 firmware HEX file"
-)
+set(MCS51_FW_HEX ${CMAKE_CURRENT_SOURCE_DIR}/mcs51_source/firmware.hex)
 
 set(MCS51_FW_BIN "${CMAKE_CURRENT_BINARY_DIR}/mcs51_fw.bin")
 set(MCS51_FW_OBJ "${CMAKE_CURRENT_BINARY_DIR}/mcs51_fw.o")
@@ -14,14 +11,9 @@ if(EXISTS "${MCS51_FW_HEX}")
         COMMENT "Converting Intel HEX to BIN: ${MCS51_FW_HEX}"
         VERBATIM
     )
+    message(STATUS "MCS51 firmware HEX found at: ${MCS51_FW_HEX}. Will convert to BIN and embed.")
 else()
-    add_custom_command(
-        OUTPUT ${MCS51_FW_BIN}
-        COMMAND ${CMAKE_COMMAND} -E touch "${MCS51_FW_BIN}"
-        COMMENT "HEX not found (${MCS51_FW_HEX}), generating empty embedded firmware BIN"
-        VERBATIM
-    )
-    message(WARNING "MCS51 firmware HEX not found at: ${MCS51_FW_HEX}. Generating empty firmware blob and using runtime fallback.")
+    message(FATAL_ERROR "MCS51 firmware HEX not found at: ${MCS51_FW_HEX}.")
 endif()
 
 add_custom_command(

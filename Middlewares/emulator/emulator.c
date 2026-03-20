@@ -1,6 +1,7 @@
 #include "emulator.h"
 #include "mcs51_emulator.h"
 #include "tim.h"
+#include "uart.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -14,7 +15,7 @@ enum
 {
   CODE_MEM_SIZE = 64 * 1024,
   XDATA_MEM_SIZE = 64 * 1024,
-  EMU_STEPS_PER_SLICE = 256,
+  EMU_STEPS_PER_SLICE = 0,
   EMU_TARGET_FOSC_HZ = 11059200,
   EMU_CLOCKS_PER_CYCLE = 12,
   NS_PER_SEC = 1000000000,
@@ -129,6 +130,7 @@ static const cpu_t cpu_template = CPU_INIT_TEMPLATE_INIT;
 static cpu_t cpu;
 static uint8_t code_mem[CODE_MEM_SIZE];
 static uint8_t xdata_mem[XDATA_MEM_SIZE];
+static timers_t timers_dev;
 static uart_t uart_dev;
 static ports_t ports_dev;
 static uint8_t usart1_rx_irq_byte;
@@ -158,9 +160,23 @@ static void uart_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
   uart_tick(uart, cycles);
 }
 
+static void timers_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
+{
+  (void)cpu_ctx;
+  timers_t *timers = (timers_t *)user;
+  timers_tick(timers, cycles);
+}
+
 static const cpu_tick_entry_t tick_hooks[] = {
+  { timers_tick_hook, &timers_dev },
   { uart_tick_hook, &uart_dev },
 };
+
+static void uart_change_baud_stdout(uint32_t baud, void *user)
+{
+    FILE *out = user ? (FILE *)user : stdout;
+    fprintf(out, "UART baud rate changed: %lu\n", baud);
+}
 
 static void uart_tx_to_stm32(uint8_t byte, void *user)
 {
@@ -283,6 +299,20 @@ static void emulator_load_embedded_firmware(void)
   printf("Embedded firmware loaded: %lu bytes\n", (unsigned long)fw_size);
 }
 
+void trace_stdout(cpu_t *cpu, uint16_t pc, uint8_t opcode, const char *name, void *user)
+{
+    FILE *out = user ? (FILE *)user : stdout;
+    fprintf(out,
+            "%04X  %02X  %-16s  A=%02X PSW=%02X SP=%02X DPTR=%04X\n",
+            pc,
+            opcode,
+            name,
+            cpu->acc,
+            cpu->psw,
+            cpu->sp,
+            cpu->dptr);
+}
+
 void emulator_entry(void)
 {
   uint32_t cycles_per_second = (uint32_t)timing_cycles_per_second(&timing_cfg);
@@ -290,13 +320,13 @@ void emulator_entry(void)
 
   printf("Build at %s %s\n", __DATE__, __TIME__);
   printf("MCS51 emulator minimal mode\n");
-    printf("Timing: fosc=%lu Hz clocks/cycle=%u cycles/s=%lu ns/cycle=%lu\n",
-         (unsigned long)timing_cfg.fosc_hz,
-         (unsigned int)timing_cfg.clocks_per_cycle,
-      (unsigned long)cycles_per_second,
-      (unsigned long)ns_per_cycle);
-    printf("MCS51 UART demo bridged to USART1\n");
-    printf("Virtual GPIO: P0..P3 enabled, P1.0 -> PA8 LED\n");
+  printf("Timing: fosc=%lu Hz clocks/cycle=%u cycles/s=%lu ns/cycle=%lu\n",
+        (unsigned long)timing_cfg.fosc_hz,
+        (unsigned int)timing_cfg.clocks_per_cycle,
+        (unsigned long)cycles_per_second,
+        (unsigned long)ns_per_cycle);
+  printf("MCS51 UART demo bridged to USART1\n");
+  printf("Virtual GPIO: P0..P3 enabled, P1.0 -> PA8 LED\n");
 
   tim5_timebase_init();
   if (tim5_counter_hz == 0ull)
@@ -304,19 +334,23 @@ void emulator_entry(void)
     printf("TIM5 timebase invalid\n");
     return;
   }
-    printf("TIM5 counter=%lu Hz tick_ns=%lu\n",
-      (unsigned long)tim5_counter_hz,
-      (unsigned long)((uint64_t)NS_PER_SEC / tim5_counter_hz));
+  printf("TIM5 counter=%lu Hz tick_ns=%lu\n",
+    (unsigned long)tim5_counter_hz,
+    (unsigned long)((uint64_t)NS_PER_SEC / tim5_counter_hz));
 
   cpu = cpu_template;
   mem_map_attach(&cpu, &mem);
+  timers_init(&timers_dev, &cpu);
+  timers_set_profile(&timers_dev, TIMERS_PROFILE_PRAGMATIC);
   ports_init(&ports_dev, &cpu, ports_read_virtual, ports_write_virtual, NULL);
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
 
   uart_init(&uart_dev, &timing_cfg);
   uart_attach(&cpu, &uart_dev);
+  uart_set_baud_callback(&uart_dev, uart_change_baud_stdout, stdout);
   uart_set_tx_callback(&uart_dev, uart_tx_to_stm32, &huart1);
   cpu_set_tick_hooks(&cpu, tick_hooks, (uint8_t)MCS51_ARRAY_LEN(tick_hooks));
+  // cpu_set_trace(&cpu, true, trace_stdout, stdout);
   usart1_rx_start_it();
 
   memset(xdata_mem, 0x00, sizeof(xdata_mem));
@@ -326,11 +360,11 @@ void emulator_entry(void)
     uart_rx_from_stm32_irq_drain();
 
     timing_reset(&timing_state);
-    uint64_t steps = cpu_run_timed(&cpu,
-                                   EMU_STEPS_PER_SLICE,
-                                   &timing_cfg,
-                                   &timing_state,
-                                   &time_iface);
+    cpu_run_timed(&cpu,
+                  EMU_STEPS_PER_SLICE,
+                  &timing_cfg,
+                  &timing_state,
+                  &time_iface);
 
     if (cpu.halted)
     {
@@ -339,11 +373,6 @@ void emulator_entry(void)
              (unsigned int)cpu.last_opcode,
              cpu.halt_reason ? cpu.halt_reason : "unknown");
       break;
-    }
-
-    if (steps == 0u)
-    {
-      osThreadYield();
     }
   }
 }
