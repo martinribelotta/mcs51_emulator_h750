@@ -2,6 +2,8 @@
 
 Run legacy 8051 firmware on modern STM32 hardware without modifying the original binary.
 
+Based on https://github.com/martinribelotta/mcs51_emulator
+
 ## Overview
 
 This project provides a runtime that executes MCS-51 (8051) firmware on STM32 microcontrollers with accurate timing and real hardware integration.
