@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <limits.h>
+#include <stdint.h>
 #include <cmsis_os2.h>
 
 enum
@@ -269,6 +270,9 @@ static const mem_map_t mem = {
     .xdata_region_count = 1,
 };
 
+extern const uint8_t mcs51_firmware_start[] __attribute__((weak));
+extern const uint8_t mcs51_firmware_end[] __attribute__((weak));
+
 static void emulator_load_min_program(void)
 {
   static const uint8_t demo_prog[] = {
@@ -302,6 +306,36 @@ static void emulator_load_min_program(void)
 
   memset(code_mem, 0x00, sizeof(code_mem));
   (void)memcpy(code_mem, demo_prog, sizeof(demo_prog));
+}
+
+static bool emulator_load_embedded_firmware(void)
+{
+  if (mcs51_firmware_start == NULL || mcs51_firmware_end == NULL)
+  {
+    return false;
+  }
+
+  uintptr_t start = (uintptr_t)mcs51_firmware_start;
+  uintptr_t end = (uintptr_t)mcs51_firmware_end;
+
+  if (end <= start)
+  {
+    return false;
+  }
+
+  size_t fw_size = (size_t)(end - start);
+  if (fw_size > sizeof(code_mem))
+  {
+    printf("Embedded firmware too large: %lu bytes (max %lu)\n",
+           (unsigned long)fw_size,
+           (unsigned long)sizeof(code_mem));
+    return false;
+  }
+
+  memset(code_mem, 0x00, sizeof(code_mem));
+  (void)memcpy(code_mem, mcs51_firmware_start, fw_size);
+  printf("Embedded firmware loaded: %lu bytes\n", (unsigned long)fw_size);
+  return true;
 }
 
 void emulator_entry(void)
@@ -341,7 +375,11 @@ void emulator_entry(void)
   usart1_rx_start_it();
 
   memset(xdata_mem, 0x00, sizeof(xdata_mem));
-  emulator_load_min_program();
+  if (!emulator_load_embedded_firmware())
+  {
+    printf("Embedded firmware unavailable, loading built-in demo\n");
+    emulator_load_min_program();
+  }
 
   while (1)
   {

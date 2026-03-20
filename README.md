@@ -87,6 +87,25 @@ Result:
    - LED toggling on PA8
    - Serial output from original firmware
 
+## Embedding firmware from ASM
+
+The build can generate and embed 8051 firmware directly from an `.asm` file:
+
+- Input: `Middlewares/emulator/mcs51_emulator/mc51code/*.asm`
+- Build pipeline: `asm -> .hex -> .bin -> linked object`
+- Runtime load: the embedded blob is copied to emulator CODE memory at startup
+
+Requirements:
+
+- `asem` available in `PATH` (8051 assembler)
+- ARM toolchain (`arm-none-eabi-objcopy`) already used by this project
+
+Select a different ASM firmware with CMake cache variable:
+
+- `MCS51_FW_ASM=<absolute-or-relative-path-to-asm>`
+
+If `asem` is not found, build still succeeds and the emulator falls back to the built-in demo program.
+
 ## Use Cases
 
 - Industrial controller migration
