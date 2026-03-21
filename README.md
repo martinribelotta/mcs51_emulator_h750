@@ -2,6 +2,8 @@
 
 This project demonstrates real 8051 firmware running unmodified on STM32H750 with working GPIO, UART and timers.
 
+![](Docs/screenshot.gif)
+
 ## What this demo shows
 
 - Original 8051 firmware running unmodified
