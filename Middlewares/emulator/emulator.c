@@ -15,15 +15,19 @@ enum
 {
   CODE_MEM_SIZE = 64 * 1024,
   XDATA_MEM_SIZE = 64 * 1024,
-  EMU_STEPS_PER_SLICE = 0,
+  EMU_STEPS_PER_SLICE = 1,
   EMU_TARGET_FOSC_HZ = 11059200,
   EMU_CLOCKS_PER_CYCLE = 12,
   NS_PER_SEC = 1000000000,
   UART_RX_RING_SIZE = 128,
+  DWT_REPORT_EVERY_SAMPLES = 50000,
 };
 
 static bool tim5_started = false;
 static uint64_t tim5_counter_hz = 0;
+
+static bool dwt_sleep_prof_enabled(void);
+static void dwt_sleep_profiler_record(uint32_t delta_cycles);
 
 static uint64_t tim5_get_input_clock_hz(void)
 {
@@ -75,16 +79,30 @@ static uint64_t freertos_now_ns(void *user)
 
 static void freertos_sleep_ns(uint64_t ns, void *user)
 {
+  uint32_t dwt_start = 0u;
+  if (dwt_sleep_prof_enabled())
+  {
+    dwt_start = DWT->CYCCNT;
+  }
+
   (void)user;
   if (ns == 0ull)
   {
     osThreadYield();
+    if (dwt_sleep_prof_enabled())
+    {
+      dwt_sleep_profiler_record(DWT->CYCCNT - dwt_start);
+    }
     return;
   }
 
   if (!tim5_started || tim5_counter_hz == 0ull)
   {
     osThreadYield();
+    if (dwt_sleep_prof_enabled())
+    {
+      dwt_sleep_profiler_record(DWT->CYCCNT - dwt_start);
+    }
     return;
   }
 
@@ -102,6 +120,10 @@ static void freertos_sleep_ns(uint64_t ns, void *user)
   if (wait_ticks == 0ull)
   {
     __NOP();
+    if (dwt_sleep_prof_enabled())
+    {
+      dwt_sleep_profiler_record(DWT->CYCCNT - dwt_start);
+    }
     return;
   }
 
@@ -109,6 +131,11 @@ static void freertos_sleep_ns(uint64_t ns, void *user)
   while ((int32_t)((uint32_t)__HAL_TIM_GET_COUNTER(&htim5) - (uint32_t)end_tick) < 0)
   {
     __NOP();
+  }
+
+  if (dwt_sleep_prof_enabled())
+  {
+    dwt_sleep_profiler_record(DWT->CYCCNT - dwt_start);
   }
 }
 
@@ -153,23 +180,241 @@ static const cpu_time_iface_t time_iface = {
   .user = NULL,
 };
 
-static void uart_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
+typedef struct
 {
-  (void)cpu_ctx;
-  uart_t *uart = (uart_t *)user;
-  uart_tick(uart, cycles);
+  bool enabled;
+  bool report_ready;
+  uint32_t min_total;
+  uint32_t max_total;
+  uint32_t samples_since_report;
+  uint64_t total_step;
+  uint64_t total_hook;
+  uint64_t total_timing;
+  uint64_t total_total;
+  uint64_t sample_count;
+  uint32_t report_step_avg;
+  uint32_t report_hook_avg;
+  uint32_t report_timing_avg;
+  uint32_t report_total_avg;
+  uint32_t report_total_min;
+  uint32_t report_total_max;
+  uint32_t report_samples;
+} dwt_tick_profiler_t;
+
+static dwt_tick_profiler_t dwt_prof = {
+  .enabled = false,
+  .report_ready = false,
+  .min_total = UINT32_MAX,
+  .max_total = 0u,
+  .samples_since_report = 0u,
+  .total_step = 0ull,
+  .total_hook = 0ull,
+  .total_timing = 0ull,
+  .total_total = 0ull,
+  .sample_count = 0ull,
+  .report_step_avg = 0u,
+  .report_hook_avg = 0u,
+  .report_timing_avg = 0u,
+  .report_total_avg = 0u,
+  .report_total_min = 0u,
+  .report_total_max = 0u,
+  .report_samples = 0u,
+};
+
+typedef struct
+{
+  bool enabled;
+  uint32_t min_cycles;
+  uint32_t max_cycles;
+  uint64_t total_cycles;
+  uint64_t call_count;
+  uint32_t report_min;
+  uint32_t report_max;
+  uint32_t report_avg;
+  uint32_t report_calls;
+} dwt_sleep_profiler_t;
+
+static dwt_sleep_profiler_t dwt_sleep_prof = {
+  .enabled = false,
+  .min_cycles = UINT32_MAX,
+  .max_cycles = 0u,
+  .total_cycles = 0ull,
+  .call_count = 0ull,
+  .report_min = 0u,
+  .report_max = 0u,
+  .report_avg = 0u,
+  .report_calls = 0u,
+};
+
+static bool dwt_sleep_prof_enabled(void)
+{
+  return dwt_sleep_prof.enabled;
 }
 
-static void timers_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
+static void dwt_sleep_profiler_record(uint32_t delta_cycles)
+{
+  if (!dwt_sleep_prof.enabled)
+  {
+    return;
+  }
+
+  if (delta_cycles < dwt_sleep_prof.min_cycles)
+  {
+    dwt_sleep_prof.min_cycles = delta_cycles;
+  }
+  if (delta_cycles > dwt_sleep_prof.max_cycles)
+  {
+    dwt_sleep_prof.max_cycles = delta_cycles;
+  }
+  dwt_sleep_prof.total_cycles += (uint64_t)delta_cycles;
+  dwt_sleep_prof.call_count++;
+}
+
+static uint32_t dwt_cycle_read(void *user)
+{
+  (void)user;
+  return DWT->CYCCNT;
+}
+
+static void dwt_run_timed_sample(uint32_t step_cycles,
+                                 uint32_t hook_cycles,
+                                 uint32_t timing_cycles,
+                                 uint32_t total_cycles,
+                                 uint8_t emu_cycles,
+                                 void *user)
+{
+  (void)emu_cycles;
+  (void)user;
+
+  if (!dwt_prof.enabled)
+  {
+    return;
+  }
+
+  dwt_prof.total_step += (uint64_t)step_cycles;
+  dwt_prof.total_hook += (uint64_t)hook_cycles;
+  dwt_prof.total_timing += (uint64_t)timing_cycles;
+  dwt_prof.total_total += (uint64_t)total_cycles;
+
+  if (total_cycles < dwt_prof.min_total)
+  {
+    dwt_prof.min_total = total_cycles;
+  }
+  if (total_cycles > dwt_prof.max_total)
+  {
+    dwt_prof.max_total = total_cycles;
+  }
+
+  dwt_prof.sample_count++;
+  dwt_prof.samples_since_report++;
+
+  if (dwt_prof.samples_since_report >= DWT_REPORT_EVERY_SAMPLES && dwt_prof.sample_count > 0u)
+  {
+    dwt_prof.report_step_avg = (uint32_t)(dwt_prof.total_step / dwt_prof.sample_count);
+    dwt_prof.report_hook_avg = (uint32_t)(dwt_prof.total_hook / dwt_prof.sample_count);
+    dwt_prof.report_timing_avg = (uint32_t)(dwt_prof.total_timing / dwt_prof.sample_count);
+    dwt_prof.report_total_avg = (uint32_t)(dwt_prof.total_total / dwt_prof.sample_count);
+    dwt_prof.report_total_min = dwt_prof.min_total;
+    dwt_prof.report_total_max = dwt_prof.max_total;
+    dwt_prof.report_samples = (uint32_t)dwt_prof.sample_count;
+    dwt_prof.report_ready = true;
+
+    dwt_prof.min_total = UINT32_MAX;
+    dwt_prof.max_total = 0u;
+    dwt_prof.samples_since_report = 0u;
+    dwt_prof.total_step = 0ull;
+    dwt_prof.total_hook = 0ull;
+    dwt_prof.total_timing = 0ull;
+    dwt_prof.total_total = 0ull;
+    dwt_prof.sample_count = 0ull;
+  }
+}
+
+static const cpu_run_timed_profiler_t run_timed_profiler = {
+  .read_cycles = dwt_cycle_read,
+  .on_sample = dwt_run_timed_sample,
+  .user = NULL,
+};
+
+static void dwt_profiler_init(void)
+{
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0u;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+  dwt_prof.enabled = ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0u);
+  dwt_sleep_prof.enabled = dwt_prof.enabled;
+  dwt_prof.report_ready = false;
+  dwt_prof.min_total = UINT32_MAX;
+  dwt_prof.max_total = 0u;
+  dwt_prof.samples_since_report = 0u;
+  dwt_prof.total_step = 0ull;
+  dwt_prof.total_hook = 0ull;
+  dwt_prof.total_timing = 0ull;
+  dwt_prof.total_total = 0ull;
+  dwt_prof.sample_count = 0ull;
+
+  dwt_sleep_prof.min_cycles = UINT32_MAX;
+  dwt_sleep_prof.max_cycles = 0u;
+  dwt_sleep_prof.total_cycles = 0ull;
+  dwt_sleep_prof.call_count = 0ull;
+  dwt_sleep_prof.report_min = 0u;
+  dwt_sleep_prof.report_max = 0u;
+  dwt_sleep_prof.report_avg = 0u;
+  dwt_sleep_prof.report_calls = 0u;
+}
+
+static void dwt_profiler_maybe_report(void)
+{
+  if (!dwt_prof.report_ready)
+  {
+    return;
+  }
+
+  dwt_prof.report_ready = false;
+
+  if (dwt_sleep_prof.call_count > 0u)
+  {
+    dwt_sleep_prof.report_calls = (uint32_t)dwt_sleep_prof.call_count;
+    dwt_sleep_prof.report_min = dwt_sleep_prof.min_cycles;
+    dwt_sleep_prof.report_max = dwt_sleep_prof.max_cycles;
+    dwt_sleep_prof.report_avg = (uint32_t)(dwt_sleep_prof.total_cycles / dwt_sleep_prof.call_count);
+
+    dwt_sleep_prof.min_cycles = UINT32_MAX;
+    dwt_sleep_prof.max_cycles = 0u;
+    dwt_sleep_prof.total_cycles = 0ull;
+    dwt_sleep_prof.call_count = 0ull;
+  }
+
+    printf("DWT run_timed cycles: step=%lu hooks=%lu timing=%lu total=%lu min=%lu max=%lu samples=%lu\n",
+      (unsigned long)dwt_prof.report_step_avg,
+      (unsigned long)dwt_prof.report_hook_avg,
+      (unsigned long)dwt_prof.report_timing_avg,
+      (unsigned long)dwt_prof.report_total_avg,
+      (unsigned long)dwt_prof.report_total_min,
+      (unsigned long)dwt_prof.report_total_max,
+         (unsigned long)dwt_prof.report_samples);
+
+  if (dwt_sleep_prof.report_calls > 0u)
+  {
+    printf("DWT freertos_sleep_ns cycles: avg=%lu min=%lu max=%lu calls=%lu\n",
+           (unsigned long)dwt_sleep_prof.report_avg,
+           (unsigned long)dwt_sleep_prof.report_min,
+           (unsigned long)dwt_sleep_prof.report_max,
+           (unsigned long)dwt_sleep_prof.report_calls);
+  }
+}
+
+static void emulator_tick_hook(cpu_t *cpu_ctx, uint32_t cycles, void *user)
 {
   (void)cpu_ctx;
-  timers_t *timers = (timers_t *)user;
-  timers_tick(timers, cycles);
+  (void)user;
+  timers_tick(&timers_dev, cycles);
+  uart_tick(&uart_dev, cycles);
 }
 
 static const cpu_tick_entry_t tick_hooks[] = {
-  { timers_tick_hook, &timers_dev },
-  { uart_tick_hook, &uart_dev },
+  { emulator_tick_hook, NULL },
 };
 
 static void uart_change_baud_stdout(uint32_t baud, void *user)
@@ -329,6 +574,15 @@ void emulator_entry(void)
   printf("Virtual GPIO: P0..P3 enabled, P1.0 -> PA8 LED\n");
 
   tim5_timebase_init();
+  dwt_profiler_init();
+  if (dwt_prof.enabled)
+  {
+    cpu_set_run_timed_profiler(&run_timed_profiler);
+  }
+  else
+  {
+    cpu_set_run_timed_profiler(NULL);
+  }
   if (tim5_counter_hz == 0ull)
   {
     printf("TIM5 timebase invalid\n");
@@ -337,6 +591,7 @@ void emulator_entry(void)
   printf("TIM5 counter=%lu Hz tick_ns=%lu\n",
     (unsigned long)tim5_counter_hz,
     (unsigned long)((uint64_t)NS_PER_SEC / tim5_counter_hz));
+  printf("DWT profiler: %s\n", dwt_prof.enabled ? "enabled" : "unavailable");
 
   cpu = cpu_template;
   mem_map_attach(&cpu, &mem);
@@ -364,7 +619,9 @@ void emulator_entry(void)
                   EMU_STEPS_PER_SLICE,
                   &timing_cfg,
                   &timing_state,
-                  &time_iface);
+                  NULL);
+
+    dwt_profiler_maybe_report();
 
     if (cpu.halted)
     {

@@ -10,9 +10,9 @@ ASEM-51 V1.3                                         Copyright (c) 2002 by W.W. 
 
 
 
-	Source File:	.\firmware.asm
-	Object File:	.\firmware.hex
-	List File:	.\firmware.lst
+	Source File:	firmware.asm
+	Object File:	firmware.hex
+	List File:	firmware.lst
 
 
 
@@ -41,7 +41,7 @@ ASEM-51 V1.3                                         Copyright (c) 2002 by W.W. 
    21:	  0050	80 F7		            SJMP send_loop
    22:
    23:	  0052	B2 90		line_done:  CPL P1.0
-   24:	  0054	11 60		            ACALL delay_250ms
+   24:	  0054	11 60		            ACALL delay_84ms
    25:	  0056	80 EE		            SJMP main_loop
    26:
    27:	  0058	F5 99		putc:       MOV SBUF, A
@@ -49,11 +49,11 @@ ASEM-51 V1.3                                         Copyright (c) 2002 by W.W. 
    29:	  005D	C2 99		            CLR TI
    30:	  005F	22		            RET
    31:
-   32:				; ~250 ms busy-wait at 11.0592 MHz (12 clocks/machine cycle)
-   33:				; Target cycles: 230400
-   34:				; 1 + 225 * (1 + 255 * 4 + 2) = 230176 cycles (~249.75 ms)
-   35:	  0060			delay_250ms:
-   36:	  0060	7E E1		            MOV R6, #0E1h
+   32:				; ~84 ms busy-wait at 11.0592 MHz (12 clocks/machine cycle)
+   33:				; Target cycles: 77414
+   34:				; 1 + 76 * (1 + 255 * 4 + 2) = 77749 cycles (~84.36 ms)
+   35:	  0060			delay_84ms:
+   36:	  0060	7E 4C		            MOV R6, #04Ch
    37:	  0062	7D FF		dly_outer:  MOV R5, #0FFh
    38:	  0064	00		dly_inner:  NOP
    39:	  0065	00		            NOP
@@ -103,7 +103,7 @@ AC				  BIT	      D6
 ACC				  DATA	      E0
 B				  DATA	      F0
 CY				  BIT	      D7
-DELAY_250MS			  CODE	    0060	  35
+DELAY_84MS			  CODE	    0060	  35
 DLY_INNER			  CODE	    0064	  38
 DLY_OUTER			  CODE	    0062	  37
 DPH				  DATA	      83

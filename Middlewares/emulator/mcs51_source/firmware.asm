@@ -21,7 +21,7 @@ send_loop:  CLR A
             SJMP send_loop
 
 line_done:  CPL P1.0
-            ACALL delay_250ms
+            ACALL delay
             SJMP main_loop
 
 putc:       MOV SBUF, A
@@ -29,11 +29,8 @@ wait_ti:    JNB TI, wait_ti
             CLR TI
             RET
 
-; ~250 ms busy-wait at 11.0592 MHz (12 clocks/machine cycle)
-; Target cycles: 230400
-; 1 + 225 * (1 + 255 * 4 + 2) = 230176 cycles (~249.75 ms)
-delay_250ms:
-            MOV R6, #0E1h
+delay:
+            MOV R6, #04Ch
 dly_outer:  MOV R5, #0FFh
 dly_inner:  NOP
             NOP
