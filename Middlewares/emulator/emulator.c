@@ -157,6 +157,31 @@ static const cpu_t cpu_template = CPU_INIT_TEMPLATE_INIT;
 static cpu_t cpu;
 static uint8_t code_mem[CODE_MEM_SIZE];
 static uint8_t xdata_mem[XDATA_MEM_SIZE];
+
+uint8_t emulator_code_read(const cpu_t *cpu_ctx, uint16_t code_addr)
+{
+  (void)cpu_ctx;
+  return code_mem[code_addr];
+}
+
+void emulator_code_write(cpu_t *cpu_ctx, uint16_t code_addr, uint8_t value)
+{
+  (void)cpu_ctx;
+  code_mem[code_addr] = value;
+}
+
+uint8_t emulator_xdata_read(const cpu_t *cpu_ctx, uint16_t xdata_addr)
+{
+  (void)cpu_ctx;
+  return xdata_mem[xdata_addr];
+}
+
+void emulator_xdata_write(cpu_t *cpu_ctx, uint16_t xdata_addr, uint8_t value)
+{
+  (void)cpu_ctx;
+  xdata_mem[xdata_addr] = value;
+}
+
 static timers_t timers_dev;
 static uart_t uart_dev;
 static ports_t ports_dev;
